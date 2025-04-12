@@ -1,0 +1,49 @@
+/* General Styles */
+body {
+    font-family: 'Vazir', tahoma, sans-serif;
+    background: #f4f6f9;
+}
+
+/* Wrapper */
+.wrapper {
+    min-height: 100vh;
+    position: relative;
+}
+
+/* Content Wrapper */
+.content-wrapper {
+    margin-right: 260px;
+    padding: 20px;
+    min-height: 100vh;
+    transition: all 0.3s ease;
+}
+
+/* Sidebar Toggle Button */
+.sidebar-toggle {
+    display: none;
+    position: fixed;
+    top: 15px;
+    right: 15px;
+    background: #1a2035;
+    color: #fff;
+    border: none;
+    border-radius: 4px;
+    padding: 8px 12px;
+    z-index: 1001;
+    cursor: pointer;
+}
+
+/* Responsive Styles */
+@media (max-width: 991.98px) {
+    .content-wrapper {
+        margin-right: 0;
+    }
+    
+    .sidebar-toggle {
+        display: block;
+    }
+    
+    .sidebar-open .content-wrapper {
+        transform: translateX(-260px);
+    }
+}

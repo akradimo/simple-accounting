@@ -1,0 +1,39 @@
+// Variables
+@use 'variables';
+
+// Bootstrap
+@use 'bootstrap/scss/bootstrap';
+
+// Custom styles
+body {
+    font-family: 'Vazirmatn', 'Tahoma', sans-serif;
+    background-color: #f8f9fa;
+}
+
+.navbar {
+    background-color: #0d6efd;
+    padding: 1rem;
+}
+
+.navbar-brand, .nav-link {
+    color: white !important;
+}
+
+.card {
+    margin-bottom: 1rem;
+    border-radius: 10px;
+    box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+}
+
+.table {
+    background-color: white;
+}
+
+.btn-primary {
+    background-color: #0d6efd;
+    border-color: #0d6efd;
+    &:hover {
+        background-color: #0b5ed7;
+        border-color: #0b5ed7;
+    }
+}

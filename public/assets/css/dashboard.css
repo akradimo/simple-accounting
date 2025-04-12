@@ -1,0 +1,64 @@
+/* RTL Support */
+body {
+    direction: rtl;
+    text-align: right;
+}
+
+/* Sidebar Styles */
+.sidebar {
+    direction: ltr;
+}
+.sidebar * {
+    direction: rtl;
+}
+.sidebar .nav-sidebar .nav-link > .right, 
+.sidebar .nav-sidebar .nav-link > p > .right {
+    right: auto;
+    left: 1rem;
+}
+.sidebar .nav-sidebar .nav-treeview {
+    padding-right: 1rem;
+    padding-left: 0;
+}
+
+/* Dashboard Cards */
+.small-box {
+    position: relative;
+    margin-bottom: 20px;
+    box-shadow: 0 0 1px rgba(0,0,0,.125), 0 1px 3px rgba(0,0,0,.2);
+}
+.small-box > .inner {
+    padding: 10px;
+}
+.small-box .icon {
+    position: absolute;
+    top: 15px;
+    left: 10px;
+    font-size: 70px;
+    color: rgba(0,0,0,.15);
+}
+.small-box h3 {
+    font-size: 2.2rem;
+    font-weight: 700;
+    margin: 0 0 10px 0;
+    white-space: nowrap;
+    padding: 0;
+}
+
+/* Charts */
+.chart-container {
+    position: relative;
+    margin: auto;
+    height: 300px;
+    width: 100%;
+}
+
+/* Responsive */
+@media (max-width: 767.98px) {
+    .small-box {
+        text-align: center;
+    }
+    .small-box .icon {
+        display: none;
+    }
+}
