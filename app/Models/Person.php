@@ -5,149 +5,215 @@ namespace App\Models;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\SoftDeletes;
-use Illuminate\Support\Facades\Storage;
 
 class Person extends Model
 {
     use HasFactory, SoftDeletes;
 
-    protected $table = 'people';
-
     protected $fillable = [
-        'code',
         'type',
-        'title',
-        'first_name',
-        'last_name',
-        'display_name',
-        'company_name',
-        'national_code',
+        'name',
+        'company',
+        'national_id',
         'economic_code',
         'registration_number',
-        'mobile',
         'phone',
+        'mobile',
         'email',
         'website',
-        'country',
-        'state',
+        'province',
         'city',
         'address',
         'postal_code',
-        'category_id',
-        'is_customer',
-        'is_supplier',
-        'is_employee',
-        'is_shareholder',
-        'is_active',
-        'credit_limit',
-        'opening_balance',
         'description',
-        'image'
+        'credit_limit',
+        'payment_deadline',
+        'status',
+        'created_by',
+        'updated_by'
     ];
 
     protected $casts = [
-        'is_customer' => 'boolean',
-        'is_supplier' => 'boolean',
-        'is_employee' => 'boolean',
-        'is_shareholder' => 'boolean',
-        'is_active' => 'boolean',
-        'credit_limit' => 'decimal:0',
-        'opening_balance' => 'decimal:0',
+        'credit_limit' => 'decimal:2',
+        'payment_deadline' => 'integer',
+        'created_at' => 'datetime',
+        'updated_at' => 'datetime',
+        'deleted_at' => 'datetime'
     ];
 
-    protected $dates = [
-        'created_at',
-        'updated_at',
-        'deleted_at'
-    ];
+    // انواع شخص
+    const TYPE_CUSTOMER = 'customer';       // مشتری
+    const TYPE_SUPPLIER = 'supplier';       // تامین کننده
+    const TYPE_EMPLOYEE = 'employee';       // کارمند
+    const TYPE_OTHER = 'other';            // سایر
 
-    protected static function boot()
-    {
-        parent::boot();
+    // وضعیت‌ها
+    const STATUS_ACTIVE = 'active';         // فعال
+    const STATUS_INACTIVE = 'inactive';     // غیرفعال
+    const STATUS_BLOCKED = 'blocked';       // مسدود
 
-        static::deleting(function ($person) {
-            if ($person->image) {
-                Storage::disk('public')->delete($person->image);
-            }
-            $person->bankAccounts()->delete();
-        });
-    }
-
-    // Relationships
-    public function category()
-    {
-        return $this->belongsTo(PersonCategory::class, 'category_id');
-    }
-
-    public function bankAccounts()
-    {
-        return $this->hasMany(BankAccount::class);
-    }
-
+    /**
+     * ارتباط با تراکنش‌ها
+     */
     public function transactions()
     {
         return $this->hasMany(Transaction::class);
     }
 
-    // Accessors & Mutators
-    public function getFullNameAttribute()
+    /**
+     * ارتباط با فاکتورهای فروش
+     */
+    public function sales()
     {
-        if ($this->type === 'individual') {
-            return trim($this->title . ' ' . $this->first_name . ' ' . $this->last_name);
+        return $this->hasMany(Sale::class);
+    }
+
+    /**
+     * ارتباط با فاکتورهای خرید
+     */
+    public function purchases()
+    {
+        return $this->hasMany(Purchase::class);
+    }
+
+    /**
+     * ارتباط با کاربر ایجاد کننده
+     */
+    public function creator()
+    {
+        return $this->belongsTo(User::class, 'created_by');
+    }
+
+    /**
+     * ارتباط با کاربر ویرایش کننده
+     */
+    public function editor()
+    {
+        return $this->belongsTo(User::class, 'updated_by');
+    }
+
+    /**
+     * محاسبه مانده حساب شخص
+     */
+    public function calculateBalance()
+    {
+        $receipts = $this->transactions()
+            ->whereIn('type', [Transaction::TYPE_RECEIPT, Transaction::TYPE_INCOME])
+            ->sum('amount');
+
+        $payments = $this->transactions()
+            ->whereIn('type', [Transaction::TYPE_PAYMENT, Transaction::TYPE_EXPENSE])
+            ->sum('amount');
+
+        return $receipts - $payments;
+    }
+
+    /**
+     * بررسی اعتبار مجاز
+     */
+    public function hasAvailableCredit($amount)
+    {
+        if ($this->credit_limit <= 0) {
+            return true;
         }
-        return $this->company_name;
+
+        $currentBalance = $this->calculateBalance();
+        return ($currentBalance + $amount) <= $this->credit_limit;
     }
 
-    public function getDisplayNameAttribute($value)
+    /**
+     * دریافت لیست انواع شخص
+     */
+    public static function getTypes()
     {
-        return $value ?: $this->full_name;
+        return [
+            self::TYPE_CUSTOMER => 'مشتری',
+            self::TYPE_SUPPLIER => 'تامین کننده',
+            self::TYPE_EMPLOYEE => 'کارمند',
+            self::TYPE_OTHER => 'سایر',
+        ];
     }
 
-    public function getBalanceAttribute()
+    /**
+     * دریافت لیست وضعیت‌ها
+     */
+    public static function getStatuses()
     {
-        return $this->opening_balance + $this->transactions()->sum('amount');
+        return [
+            self::STATUS_ACTIVE => 'فعال',
+            self::STATUS_INACTIVE => 'غیرفعال',
+            self::STATUS_BLOCKED => 'مسدود',
+        ];
     }
 
-    // Scopes
-    public function scopeActive($query)
+    /**
+     * اسکوپ برای فیلتر بر اساس نوع شخص
+     */
+    public function scopeOfType($query, $type)
     {
-        return $query->where('is_active', true);
+        return $query->where('type', $type);
     }
 
-    public function scopeCustomers($query)
+    /**
+     * اسکوپ برای فیلتر بر اساس وضعیت
+     */
+    public function scopeWithStatus($query, $status)
     {
-        return $query->where('is_customer', true);
+        return $query->where('status', $status);
     }
 
-    public function scopeSuppliers($query)
+    /**
+     * اسکوپ برای جستجوی شخص
+     */
+    public function scopeSearch($query, $term)
     {
-        return $query->where('is_supplier', true);
+        return $query->where(function ($q) use ($term) {
+            $q->where('name', 'LIKE', "%{$term}%")
+              ->orWhere('company', 'LIKE', "%{$term}%")
+              ->orWhere('national_id', 'LIKE', "%{$term}%")
+              ->orWhere('phone', 'LIKE', "%{$term}%")
+              ->orWhere('mobile', 'LIKE', "%{$term}%")
+              ->orWhere('email', 'LIKE', "%{$term}%");
+        });
     }
 
-    public function scopeEmployees($query)
+    /**
+     * اسکوپ برای دریافت بدهکاران
+     */
+    public function scopeDebtors($query)
     {
-        return $query->where('is_employee', true);
+        return $query->whereHas('transactions', function ($q) {
+            $q->selectRaw('person_id, SUM(CASE 
+                WHEN type IN (?, ?) THEN amount 
+                WHEN type IN (?, ?) THEN -amount 
+                ELSE 0 END) as balance', [
+                Transaction::TYPE_RECEIPT,
+                Transaction::TYPE_INCOME,
+                Transaction::TYPE_PAYMENT,
+                Transaction::TYPE_EXPENSE
+            ])
+            ->groupBy('person_id')
+            ->having('balance', '<', 0);
+        });
     }
 
-    public function scopeShareholders($query)
+    /**
+     * اسکوپ برای دریافت بستانکاران
+     */
+    public function scopeCreditors($query)
     {
-        return $query->where('is_shareholder', true);
-    }
-
-    // Methods
-    public function hasTransactions()
-    {
-        return $this->transactions()->exists();
-    }
-
-    public function updateBalance()
-    {
-        $this->balance = $this->opening_balance + $this->transactions()->sum('amount');
-        $this->save();
-    }
-
-    public function getImageUrlAttribute()
-    {
-        return $this->image ? Storage::disk('public')->url($this->image) : null;
+        return $query->whereHas('transactions', function ($q) {
+            $q->selectRaw('person_id, SUM(CASE 
+                WHEN type IN (?, ?) THEN amount 
+                WHEN type IN (?, ?) THEN -amount 
+                ELSE 0 END) as balance', [
+                Transaction::TYPE_RECEIPT,
+                Transaction::TYPE_INCOME,
+                Transaction::TYPE_PAYMENT,
+                Transaction::TYPE_EXPENSE
+            ])
+            ->groupBy('person_id')
+            ->having('balance', '>', 0);
+        });
     }
 }

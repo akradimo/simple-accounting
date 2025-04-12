@@ -1,315 +1,204 @@
 <?php
 
 namespace App\Http\Controllers;
+
 use App\Models\Person;
-use App\Models\Category;
-use App\Models\PersonCategory;
+use App\Models\Transaction;
 use Illuminate\Http\Request;
-use Illuminate\Support\Facades\Auth;
-use Carbon\Carbon;
-use Illuminate\Support\Facades\Storage;
-use Illuminate\Support\Facades\DB; // اضافه شد
+use App\Http\Requests\PersonRequest;
+use Illuminate\Support\Facades\DB;
 use RealRashid\SweetAlert\Facades\Alert;
+
 class PersonController extends Controller
 {
-    public function index()
+    /**
+     * نمایش لیست اشخاص
+     */
+    public function index(Request $request)
     {
-        // دریافت اطلاعات اشخاص
-        $persons = Person::query()
-            ->with('category')
-            ->get()
-            ->map(function ($person) {
-                return [
-                    'id' => $person->id,
-                    'code' => $person->code,
-                    'type' => $person->type,
-                    'full_name' => $person->type === 'individual' 
-                        ? "{$person->first_name} {$person->last_name}"
-                        : $person->company_name,
-                    'category_name' => $person->category?->name,
-                    'category_id' => $person->category_id,
-                    'mobile' => $person->mobile,
-                    'phone' => $person->phone,
-                    'status' => $person->is_active,
-                    'credit_limit' => (float) $person->credit_limit,
-                    'balance' => (float) $person->opening_balance,
-                ];
-            });
+        $query = Person::query();
 
-        // دریافت دسته‌بندی‌ها
-        $categories = PersonCategory::orderBy('name')->get();
+        // اعمال فیلترها
+        if ($request->has('type')) {
+            $query->ofType($request->type);
+        }
 
-        // دریافت تاریخ و نام کاربر
-        $data = [
-            'persons' => $persons,
-            'categories' => $categories,
-            'current_datetime' => Carbon::now()->format('Y-m-d H:i:s'),
-            'user_login' => Auth::user()->name ?? 'esmeeilir1'
-        ];
+        if ($request->has('status')) {
+            $query->withStatus($request->status);
+        }
 
-        return view('persons.index', $data);
+        if ($request->has('search')) {
+            $query->search($request->search);
+        }
+
+        // مرتب‌سازی
+        $sortField = $request->get('sort', 'created_at');
+        $sortDirection = $request->get('direction', 'desc');
+        $query->orderBy($sortField, $sortDirection);
+
+        $people = $query->paginate(15)->withQueryString();
+
+        return view('people.index', [
+            'people' => $people,
+            'types' => Person::getTypes(),
+            'statuses' => Person::getStatuses(),
+            'filters' => $request->all()
+        ]);
     }
 
+    /**
+     * نمایش فرم ایجاد شخص جدید
+     */
     public function create()
     {
-        $lastCode = Person::max('code');
-        $nextCode = $lastCode ? str_pad((intval($lastCode) + 1), 6, '0', STR_PAD_LEFT) : '000001';
-        $categories = PersonCategory::where('is_active', true)->orderBy('order')->get();
+        // تولید کد حسابداری جدید
+        $lastCode = Person::max('code') ?? 1000;
+        $nextCode = $lastCode + 1;
 
-        return view('people.create', compact('nextCode', 'categories'));
+        return view('people.create', [
+            'types' => Person::getTypes(),
+            'statuses' => Person::getStatuses(),
+            'nextCode' => $nextCode
+        ]);
     }
 
-    public function store(Request $request)
+    /**
+     * ذخیره شخص جدید
+     */
+    public function store(PersonRequest $request)
     {
-        DB::beginTransaction();
         try {
-            $validated = $request->validate([
-                'code' => 'required|string|unique:people,code',
-                'type' => 'required|in:individual,company',
-                'title' => 'nullable|string',
-                'first_name' => 'required|string|max:255',
-                'last_name' => 'required|string|max:255',
-                'mobile' => 'nullable|string|max:11',
-                'phone' => 'nullable|string|max:11',
-                'email' => 'nullable|email',
-                'address' => 'nullable|string',
-                'category_id' => 'required|exists:person_categories,id',
-                'credit_limit' => 'nullable|numeric|min:0',
-                'opening_balance' => 'nullable|numeric',
-                'status' => 'boolean'
+            DB::beginTransaction();
+
+            $person = Person::create([
+                ...$request->validated(),
+                'created_by' => auth()->id()
             ]);
 
-            $person = Person::create($validated);
-            DB::commit();
+            // ایجاد تراکنش اولیه در صورت وجود
+            if ($request->filled('initial_balance')) {
+                $transactionType = $request->initial_balance >= 0 
+                    ? Transaction::TYPE_RECEIPT 
+                    : Transaction::TYPE_PAYMENT;
 
-            if ($request->ajax() || $request->wantsJson()) {
-                return response()->json([
-                    'success' => true,
-                    'message' => 'شخص جدید با موفقیت ایجاد شد'
+                Transaction::create([
+                    'date' => now(),
+                    'type' => $transactionType,
+                    'amount' => abs($request->initial_balance),
+                    'description' => 'مانده اولیه',
+                    'person_id' => $person->id,
+                    'payment_method' => Transaction::METHOD_CASH,
+                    'status' => Transaction::STATUS_COMPLETED,
+                    'created_by' => auth()->id()
                 ]);
             }
 
+            DB::commit();
             Alert::success('موفق', 'شخص جدید با موفقیت ایجاد شد');
-            return redirect()->route('persons.index');
-
-        } catch (ValidationException $e) {
-            DB::rollBack();
-            if ($request->ajax() || $request->wantsJson()) {
-                return response()->json([
-                    'success' => false,
-                    'errors' => $e->errors()
-                ], 422);
-            }
-
-            Alert::error('خطا', 'لطفاً اطلاعات را به درستی وارد کنید');
-            return back()->withErrors($e->errors())->withInput();
+            return redirect()->route('people.index');
 
         } catch (\Exception $e) {
             DB::rollBack();
-            if ($request->ajax() || $request->wantsJson()) {
-                return response()->json([
-                    'success' => false,
-                    'message' => 'خطا در ذخیره اطلاعات'
-                ], 500);
-            }
-
-            Alert::error('خطا', 'خطا در ذخیره اطلاعات');
+            Alert::error('خطا', 'مشکلی در ایجاد شخص رخ داد');
             return back()->withInput();
         }
     }
 
-
-    // سایر متدها بدون تغییر...
-    // تمام متدهای دیگر کنترلر بدون تغییر باقی می‌مانند
-    
+    /**
+     * نمایش اطلاعات شخص
+     */
     public function show(Person $person)
     {
-        $person->load(['category', 'bankAccounts', 'transactions']);
-        return view('people.show', compact('person'));
-    }
+        $person->load(['transactions' => function ($query) {
+            $query->latest('date')->take(10);
+        }, 'sales' => function ($query) {
+            $query->latest()->take(5);
+        }, 'purchases' => function ($query) {
+            $query->latest()->take(5);
+        }]);
 
-    public function edit(Person $person)
-    {
-        $categories = PersonCategory::where('is_active', true)->orderBy('order')->get();
-        $person->load('bankAccounts');
-        return view('people.edit', compact('person', 'categories'));
-    }
+        $balance = $person->calculateBalance();
 
-    public function update(Request $request, Person $person)
-    {
-        $validated = $this->validatePerson($request, $person->id);
-
-        if ($request->hasFile('image')) {
-            if ($person->image) {
-                Storage::disk('public')->delete($person->image);
-            }
-            $validated['image'] = $this->handleImageUpload($request->file('image'));
-        }
-
-        $person->update($validated);
-
-        if ($request->has('bank_accounts')) {
-            $this->saveBankAccounts($person, $request->bank_accounts);
-        }
-
-        return response()->json([
-            'message' => 'اطلاعات با موفقیت به‌روزرسانی شد',
-            'redirect' => route('persons.index')
+        return view('people.show', [
+            'person' => $person,
+            'balance' => $balance
         ]);
     }
 
+    /**
+     * نمایش فرم ویرایش شخص
+     */
+    public function edit(Person $person)
+    {
+        return view('people.edit', [
+            'person' => $person,
+            'types' => Person::getTypes(),
+            'statuses' => Person::getStatuses()
+        ]);
+    }
+
+    /**
+     * بروزرسانی اطلاعات شخص
+     */
+    public function update(PersonRequest $request, Person $person)
+    {
+        try {
+            $person->update([
+                ...$request->validated(),
+                'updated_by' => auth()->id()
+            ]);
+
+            Alert::success('موفق', 'اطلاعات شخص با موفقیت بروزرسانی شد');
+            return redirect()->route('people.index');
+
+        } catch (\Exception $e) {
+            Alert::error('خطا', 'مشکلی در بروزرسانی اطلاعات رخ داد');
+            return back()->withInput();
+        }
+    }
+
+    /**
+     * حذف شخص
+     */
     public function destroy(Person $person)
     {
         try {
+            // بررسی وجود تراکنش‌های مرتبط
             if ($person->transactions()->exists()) {
-                return response()->json([
-                    'message' => 'این شخص دارای تراکنش است و قابل حذف نیست'
-                ], 422);
-            }
-
-            if ($person->image) {
-                Storage::disk('public')->delete($person->image);
+                Alert::warning('هشدار', 'این شخص دارای تراکنش است و قابل حذف نیست');
+                return back();
             }
 
             $person->delete();
-
-            return response()->json([
-                'message' => 'شخص با موفقیت حذف شد'
-            ]);
+            Alert::success('موفق', 'شخص با موفقیت حذف شد');
+            return redirect()->route('people.index');
 
         } catch (\Exception $e) {
-            return response()->json([
-                'message' => 'خطا در حذف شخص'
-            ], 500);
+            Alert::error('خطا', 'مشکلی در حذف شخص رخ داد');
+            return back();
         }
     }
 
-    public function bulkDelete(Request $request)
+    /**
+     * نمایش گزارش مالی شخص
+     */
+    public function report(Person $person, Request $request)
     {
-        $ids = $request->ids;
-        $hasTransactions = Person::whereIn('id', $ids)->whereHas('transactions')->exists();
+        $query = $person->transactions();
 
-        if ($hasTransactions) {
-            return response()->json([
-                'message' => 'برخی از اشخاص انتخابی دارای تراکنش هستند و قابل حذف نیستند'
-            ], 422);
+        // اعمال فیلتر تاریخ
+        if ($request->has(['start_date', 'end_date'])) {
+            $query->betweenDates($request->start_date, $request->end_date);
         }
 
-        Person::whereIn('id', $ids)->get()->each(function($person) {
-            if ($person->image) {
-                Storage::disk('public')->delete($person->image);
-            }
-        });
+        $transactions = $query->latest('date')->paginate(20);
+        $balance = $person->calculateBalance();
 
-        Person::whereIn('id', $ids)->delete();
-
-        return response()->json([
-            'message' => 'اشخاص انتخاب شده با موفقیت حذف شدند'
+        return view('people.report', [
+            'person' => $person,
+            'transactions' => $transactions,
+            'balance' => $balance,
+            'filters' => $request->all()
         ]);
-    }
-
-    public function bulkStatus(Request $request)
-    {
-        $status = $request->status === 'enable';
-        Person::whereIn('id', $request->ids)->update(['is_active' => $status]);
-
-        return response()->json([
-            'message' => 'وضعیت اشخاص انتخاب شده با موفقیت تغییر کرد'
-        ]);
-    }
-
-    public function export()
-    {
-        return Excel::download(new PeopleExport, 'people.xlsx');
-    }
-
-    public function import(Request $request)
-    {
-        $request->validate([
-            'excel_file' => 'required|file|mimes:xlsx,xls'
-        ]);
-
-        try {
-            Excel::import(new PeopleImport, $request->file('excel_file'));
-
-            return response()->json([
-                'message' => 'اطلاعات با موفقیت وارد شد'
-            ]);
-
-        } catch (\Exception $e) {
-            return response()->json([
-                'message' => 'خطا در ورود اطلاعات: ' . $e->getMessage()
-            ], 422);
-        }
-    }
-
-    public function getCurrentInfo()
-    {
-        return response()->json([
-            'current_datetime' => now()->format('Y-m-d H:i:s'),
-            'user_login' => auth()->user()->name ?? auth()->user()->email
-        ]);
-    }
-
-    private function validatePerson(Request $request, $id = null)
-    {
-        return $request->validate([
-            'code' => 'required|string|unique:people,code,' . $id,
-            'type' => 'required|in:individual,company',
-            'title' => 'nullable|string|max:50',
-            'first_name' => 'required_if:type,individual|nullable|string|max:255',
-            'last_name' => 'required_if:type,individual|nullable|string|max:255',
-            'display_name' => 'nullable|string|max:255',
-            'company_name' => 'required_if:type,company|nullable|string|max:255',
-            'national_code' => 'nullable|string|unique:people,national_code,' . $id,
-            'economic_code' => 'nullable|string',
-            'registration_number' => 'nullable|string',
-            'mobile' => 'nullable|string|max:11',
-            'phone' => 'nullable|string|max:11',
-            'email' => 'nullable|email|max:255',
-            'website' => 'nullable|url|max:255',
-            'country' => 'nullable|string|max:100',
-            'state' => 'nullable|string|max:100',
-            'city' => 'nullable|string|max:100',
-            'address' => 'nullable|string',
-            'postal_code' => 'nullable|string|max:10',
-            'category_id' => 'required|exists:person_categories,id',
-            'is_customer' => 'boolean',
-            'is_supplier' => 'boolean',
-            'is_employee' => 'boolean',
-            'is_shareholder' => 'boolean',
-            'is_active' => 'boolean',
-            'credit_limit' => 'nullable|numeric|min:0',
-            'opening_balance' => 'nullable|numeric',
-            'description' => 'nullable|string',
-            'image' => 'nullable|image|mimes:jpeg,png,jpg|max:2048'
-        ]);
-    }
-
-    private function handleImageUpload($file)
-    {
-        $fileName = Str::random(40) . '.' . $file->getClientOriginalExtension();
-        $path = 'people/' . $fileName;
-
-        $image = Image::make($file)
-            ->fit(300, 300, function ($constraint) {
-                $constraint->aspectRatio();
-            })
-            ->encode('jpg', 80);
-
-        Storage::disk('public')->put($path, $image);
-
-        return $path;
-    }
-
-    private function saveBankAccounts($person, $accounts)
-    {
-        $person->bankAccounts()->delete();
-
-        foreach ($accounts as $account) {
-            if (!empty($account['bank']) && !empty($account['account_number'])) {
-                $person->bankAccounts()->create($account);
-            }
-        }
     }
 }
